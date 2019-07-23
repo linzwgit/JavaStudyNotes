@@ -265,6 +265,192 @@ String result = restTemplate.getForObject(url, String.class);
 ClientWeatherResultVO vo = SerializeUtil.DeSerialize(result, ClientWeatherResultVO.class);
 
 ```
+但是，如果我们想直接返回一个实体对象：
+```java
+String url = "http://wthrcdn.etouch.cn/weather_mini?city=上海";
+
+ClientWeatherResultVO weatherResultVO = restTemplate.getForObject(url, ClientWeatherResultVO.class);
+
+```
+则直接报异常：
+Could not extract response: no suitable HttpMessageConverter found for response type [class ]
+and content type [application/octet-stream]
+
+很多人碰到过这个问题，首次碰到估计大多都比较懵吧，很多接口都是json或者xml或者plain text格式返回的，什么是application/octet-stream？
+
+查看RestTemplate源代码，一路跟踪下去会发现HttpMessageConverterExtractor类的extractData方法有个解析应答及反序列化逻辑，如果不成功，抛出的异常信息和上述一致：
+```java
+@Override
+    @SuppressWarnings({"unchecked", "rawtypes", "resource"})
+    public T extractData(ClientHttpResponse response) throws IOException {
+        MessageBodyClientHttpResponseWrapper responseWrapper = new MessageBodyClientHttpResponseWrapper(response);
+        if (!responseWrapper.hasMessageBody() || responseWrapper.hasEmptyMessageBody()) {
+            return null;
+        }
+        MediaType contentType = getContentType(responseWrapper);
+
+        try {
+            for (HttpMessageConverter<?> messageConverter : this.messageConverters) {
+                if (messageConverter instanceof GenericHttpMessageConverter) {
+                    GenericHttpMessageConverter<?> genericMessageConverter =
+                            (GenericHttpMessageConverter<?>) messageConverter;
+                    if (genericMessageConverter.canRead(this.responseType, null, contentType)) {
+                        if (logger.isDebugEnabled()) {
+                            logger.debug("Reading [" + this.responseType + "] as \"" +
+                                    contentType + "\" using [" + messageConverter + "]");
+                        }
+                        return (T) genericMessageConverter.read(this.responseType, null, responseWrapper);
+                    }
+                }
+                if (this.responseClass != null) {
+                    if (messageConverter.canRead(this.responseClass, contentType)) {
+                        if (logger.isDebugEnabled()) {
+                            logger.debug("Reading [" + this.responseClass.getName() + "] as \"" +
+                                    contentType + "\" using [" + messageConverter + "]");
+                        }
+                        return (T) messageConverter.read((Class) this.responseClass, responseWrapper);
+                    }
+                }
+            }
+        }
+        catch (IOException | HttpMessageNotReadableException ex) {
+            throw new RestClientException("Error while extracting response for type [" +
+                    this.responseType + "] and content type [" + contentType + "]", ex);
+        }
+
+        throw new RestClientException("Could not extract response: no suitable HttpMessageConverter found " +
+                "for response type [" + this.responseType + "] and content type [" + contentType + "]");
+    }
+
+HttpMessageConverterExtractor.extractData
+
+```
+
+StackOverflow上的解决的示例代码可以接受，但是并不准确，常见的MIMEType都应该加进去，贴一下我认为正确的代码：
+```java
+package com.power.demo.restclient.config;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.common.collect.Lists;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.web.client.RestTemplateBuilder;
+import org.springframework.context.annotation.Bean;
+import org.springframework.http.MediaType;
+import org.springframework.http.converter.*;
+import org.springframework.http.converter.cbor.MappingJackson2CborHttpMessageConverter;
+import org.springframework.http.converter.feed.AtomFeedHttpMessageConverter;
+import org.springframework.http.converter.feed.RssChannelHttpMessageConverter;
+import org.springframework.http.converter.json.GsonHttpMessageConverter;
+import org.springframework.http.converter.json.JsonbHttpMessageConverter;
+import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
+import org.springframework.http.converter.smile.MappingJackson2SmileHttpMessageConverter;
+import org.springframework.http.converter.support.AllEncompassingFormHttpMessageConverter;
+import org.springframework.http.converter.xml.Jaxb2RootElementHttpMessageConverter;
+import org.springframework.http.converter.xml.MappingJackson2XmlHttpMessageConverter;
+import org.springframework.http.converter.xml.SourceHttpMessageConverter;
+import org.springframework.stereotype.Component;
+import org.springframework.util.ClassUtils;
+import org.springframework.web.client.RestTemplate;
+
+import java.util.Arrays;
+import java.util.List;
+
+@Component
+public class RestTemplateConfig {
+
+    private static final boolean romePresent = ClassUtils.isPresent("com.rometools.rome.feed.WireFeed", RestTemplate
+            .class.getClassLoader());
+    private static final boolean jaxb2Present = ClassUtils.isPresent("javax.xml.bind.Binder", RestTemplate.class.getClassLoader());
+    private static final boolean jackson2Present = ClassUtils.isPresent("com.fasterxml.jackson.databind.ObjectMapper", RestTemplate.class.getClassLoader()) && ClassUtils.isPresent("com.fasterxml.jackson.core.JsonGenerator", RestTemplate.class.getClassLoader());
+    private static final boolean jackson2XmlPresent = ClassUtils.isPresent("com.fasterxml.jackson.dataformat.xml.XmlMapper", RestTemplate.class.getClassLoader());
+    private static final boolean jackson2SmilePresent = ClassUtils.isPresent("com.fasterxml.jackson.dataformat.smile.SmileFactory", RestTemplate.class.getClassLoader());
+    private static final boolean jackson2CborPresent = ClassUtils.isPresent("com.fasterxml.jackson.dataformat.cbor.CBORFactory", RestTemplate.class.getClassLoader());
+    private static final boolean gsonPresent = ClassUtils.isPresent("com.google.gson.Gson", RestTemplate.class.getClassLoader());
+    private static final boolean jsonbPresent = ClassUtils.isPresent("javax.json.bind.Jsonb", RestTemplate.class.getClassLoader());
+
+    // 启动的时候要注意，由于我们在服务中注入了RestTemplate，所以启动的时候需要实例化该类的一个实例
+    @Autowired
+    private RestTemplateBuilder builder;
+
+    @Autowired
+    private ObjectMapper objectMapper;
+
+    // 使用RestTemplateBuilder来实例化RestTemplate对象，spring默认已经注入了RestTemplateBuilder实例
+    @Bean
+    public RestTemplate restTemplate() {
+
+        RestTemplate restTemplate = builder.build();
+
+        List<HttpMessageConverter<?>> messageConverters = Lists.newArrayList();
+        MappingJackson2HttpMessageConverter converter = new MappingJackson2HttpMessageConverter();
+        converter.setObjectMapper(objectMapper);
+
+        //不加会出现异常
+        //Could not extract response: no suitable HttpMessageConverter found for response type [class ]
+
+        MediaType[] mediaTypes = new MediaType[]{
+                MediaType.APPLICATION_JSON,
+                MediaType.APPLICATION_OCTET_STREAM,
+
+                MediaType.APPLICATION_JSON_UTF8,
+                MediaType.TEXT_HTML,
+                MediaType.TEXT_PLAIN,
+                MediaType.TEXT_XML,
+                MediaType.APPLICATION_STREAM_JSON,
+                MediaType.APPLICATION_ATOM_XML,
+                MediaType.APPLICATION_FORM_URLENCODED,
+                MediaType.APPLICATION_PDF,
+        };
+
+        converter.setSupportedMediaTypes(Arrays.asList(mediaTypes));
+
+        //messageConverters.add(converter);
+        if (jackson2Present) {
+            messageConverters.add(converter);
+        } else if (gsonPresent) {
+            messageConverters.add(new GsonHttpMessageConverter());
+        } else if (jsonbPresent) {
+            messageConverters.add(new JsonbHttpMessageConverter());
+        }
+
+        messageConverters.add(new FormHttpMessageConverter());
+
+        messageConverters.add(new ByteArrayHttpMessageConverter());
+        messageConverters.add(new StringHttpMessageConverter());
+        messageConverters.add(new ResourceHttpMessageConverter(false));
+        messageConverters.add(new SourceHttpMessageConverter());
+        messageConverters.add(new AllEncompassingFormHttpMessageConverter());
+        if (romePresent) {
+            messageConverters.add(new AtomFeedHttpMessageConverter());
+            messageConverters.add(new RssChannelHttpMessageConverter());
+        }
+
+        if (jackson2XmlPresent) {
+            messageConverters.add(new MappingJackson2XmlHttpMessageConverter());
+        } else if (jaxb2Present) {
+            messageConverters.add(new Jaxb2RootElementHttpMessageConverter());
+        }
+
+
+        if (jackson2SmilePresent) {
+            messageConverters.add(new MappingJackson2SmileHttpMessageConverter());
+        }
+
+        if (jackson2CborPresent) {
+            messageConverters.add(new MappingJackson2CborHttpMessageConverter());
+        }
+
+        restTemplate.setMessageConverters(messageConverters);
+
+        return restTemplate;
+    }
+
+}
+
+RestTemplateConfig
+
+```
+
 
 
 
