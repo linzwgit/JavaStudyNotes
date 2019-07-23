@@ -108,5 +108,114 @@ doExecute方法封装了模板方法，比如创建连接、处理请求和应�
 
 以一个POST调用为例：
 
+```java
+@Override
+        @SuppressWarnings("unchecked")
+        public void doWithRequest(ClientHttpRequest httpRequest) throws IOException {
+            super.doWithRequest(httpRequest);
+            Object requestBody = this.requestEntity.getBody();
+            if (requestBody == null) {
+                HttpHeaders httpHeaders = httpRequest.getHeaders();
+                HttpHeaders requestHeaders = this.requestEntity.getHeaders();
+                if (!requestHeaders.isEmpty()) {
+                    for (Map.Entry<String, List<String>> entry : requestHeaders.entrySet()) {
+                        httpHeaders.put(entry.getKey(), new LinkedList<>(entry.getValue()));
+                    }
+                }
+                if (httpHeaders.getContentLength() < 0) {
+                    httpHeaders.setContentLength(0L);
+                }
+            }
+            else {
+                Class<?> requestBodyClass = requestBody.getClass();
+                Type requestBodyType = (this.requestEntity instanceof RequestEntity ?
+                        ((RequestEntity<?>)this.requestEntity).getType() : requestBodyClass);
+                HttpHeaders httpHeaders = httpRequest.getHeaders();
+                HttpHeaders requestHeaders = this.requestEntity.getHeaders();
+                MediaType requestContentType = requestHeaders.getContentType();
+                for (HttpMessageConverter<?> messageConverter : getMessageConverters()) {
+                    if (messageConverter instanceof GenericHttpMessageConverter) {
+                        GenericHttpMessageConverter<Object> genericConverter =
+                                (GenericHttpMessageConverter<Object>) messageConverter;
+                        if (genericConverter.canWrite(requestBodyType, requestBodyClass, requestContentType)) {
+                            if (!requestHeaders.isEmpty()) {
+                                for (Map.Entry<String, List<String>> entry : requestHeaders.entrySet()) {
+                                    httpHeaders.put(entry.getKey(), new LinkedList<>(entry.getValue()));
+                                }
+                            }
+                            if (logger.isDebugEnabled()) {
+                                if (requestContentType != null) {
+                                    logger.debug("Writing [" + requestBody + "] as \"" + requestContentType +
+                                            "\" using [" + messageConverter + "]");
+                                }
+                                else {
+                                    logger.debug("Writing [" + requestBody + "] using [" + messageConverter + "]");
+                                }
+
+                            }
+                            genericConverter.write(requestBody, requestBodyType, requestContentType, httpRequest);
+                            return;
+                        }
+                    }
+                    else if (messageConverter.canWrite(requestBodyClass, requestContentType)) {
+                        if (!requestHeaders.isEmpty()) {
+                            for (Map.Entry<String, List<String>> entry : requestHeaders.entrySet()) {
+                                httpHeaders.put(entry.getKey(), new LinkedList<>(entry.getValue()));
+                            }
+                        }
+                        if (logger.isDebugEnabled()) {
+                            if (requestContentType != null) {
+                                logger.debug("Writing [" + requestBody + "] as \"" + requestContentType +
+                                        "\" using [" + messageConverter + "]");
+                            }
+                            else {
+                                logger.debug("Writing [" + requestBody + "] using [" + messageConverter + "]");
+                            }
+
+                        }
+                        ((HttpMessageConverter<Object>) messageConverter).write(
+                                requestBody, requestContentType, httpRequest);
+                        return;
+                    }
+                }
+                String message = "Could not write request: no suitable HttpMessageConverter found for request type [" +
+                        requestBodyClass.getName() + "]";
+                if (requestContentType != null) {
+                    message += " and content type [" + requestContentType + "]";
+                }
+                throw new RestClientException(message);
+            }
+        }
+
+HttpEntityRequestCallback.doWithRequest
+
+```
+
+最简单的解决方案是，可以通过包装http请求头，并将请求对象序列化成字符串的形式传参，参考示例代码如下：
+```java
+/*
+     * Post请求调用
+     * */
+    public static String postForObject(RestTemplate restTemplate, String url, Object params) {
+        HttpHeaders headers = new HttpHeaders();
+        MediaType type = MediaType.parseMediaType("application/json; charset=UTF-8");
+        headers.setContentType(type);
+        headers.add("Accept", MediaType.APPLICATION_JSON.toString());
+
+        String json = SerializeUtil.Serialize(params);
+
+        HttpEntity<String> formEntity = new HttpEntity<String>(json, headers);
+
+        String result = restTemplate.postForObject(url, formEntity, String.class);
+
+        return result;
+    }
+
+postForObject
+
+```
+
+如果我们还想直接返回对象，直接反序列化返回的字符串即可
+
 
 
