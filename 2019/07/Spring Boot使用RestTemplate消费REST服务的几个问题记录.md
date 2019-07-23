@@ -216,6 +216,58 @@ postForObject
 ```
 
 如果我们还想直接返回对象，直接反序列化返回的字符串即可
+```java
+/*
+     * Post请求调用
+     * */
+    public static <T> T postForObject(RestTemplate restTemplate, String url, Object params, Class<T> clazz) {
+        T response = null;
+
+        String respStr = postForObject(restTemplate, url, params);
+
+        response = SerializeUtil.DeSerialize(respStr, clazz);
+
+        return response;
+    }
+
+ postForObject
+
+```
+
+其中，序列化和反序列化工具比较多，常用的比如fastjson、jackson和gson。
+
+2、no suitable HttpMessageConverter found for response type异常
+
+和发起请求发生异常一样，处理应答的时候也会有问题。
+
+StackOverflow上有人问过相同的问题，根本原因是HTTP消息转换器HttpMessageConverter缺少MIME Type，也就是说HTTP在把输出结果传送到客户端的时候，客户端必须启动适当的应用程序来处理这个输出文档，这可以通过多种MIME（多功能网际邮件扩充协议）Type来完成。
+
+对于服务端应答，很多HttpMessageConverter默认支持的媒体类型（MIMEType）都不同。StringHttpMessageConverter默认支持的则是MediaType.TEXT_PLAIN，SourceHttpMessageConverter默认支持的则是MediaType.TEXT_XML，FormHttpMessageConverter默认支持的是MediaType.APPLICATION_FORM_URLENCODED和MediaType.MULTIPART_FORM_DATA，在REST服务中，我们用到的最多的还是MappingJackson2HttpMessageConverter，这是一个比较通用的转化器（继承自GenericHttpMessageConverter接口），根据分析，它默认支持的MIMEType为MediaType.APPLICATION_JSON：
+
+```java
+/**
+     * Construct a new {@link MappingJackson2HttpMessageConverter} with a custom {@link ObjectMapper}.
+     * You can use {@link Jackson2ObjectMapperBuilder} to build it easily.
+     * @see Jackson2ObjectMapperBuilder#json()
+     */
+    public MappingJackson2HttpMessageConverter(ObjectMapper objectMapper) {
+        super(objectMapper, MediaType.APPLICATION_JSON, new MediaType("application", "*+json"));
+    }
+
+MappingJackson2HttpMessageConverter
+
+```
+
+但是有些应用接口默认的应答MIMEType不是application/json，比如我们调用一个外部天气预报接口，如果使用RestTemplate的默认配置，直接返回一个字符串应答是没有问题的
+```java
+String url = "http://wthrcdn.etouch.cn/weather_mini?city=上海";
+String result = restTemplate.getForObject(url, String.class);
+ClientWeatherResultVO vo = SerializeUtil.DeSerialize(result, ClientWeatherResultVO.class);
+
+```
+
+
+
 
 
 
