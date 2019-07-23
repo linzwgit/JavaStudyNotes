@@ -573,9 +573,118 @@ public abstract class AbstractJackson2HttpMessageConverter extends AbstractGener
 
 ```
 而StringHttpMessageConverter比较特殊，有人反馈过发生乱码问题由它默认支持的编码ISO-8859-1引起：
-```ja
+```java
+/**
+ * Implementation of {@link HttpMessageConverter} that can read and write strings.
+ *
+ * <p>By default, this converter supports all media types ({@code &#42;&#47;&#42;}),
+ * and writes with a {@code Content-Type} of {@code text/plain}. This can be overridden
+ * by setting the {@link #setSupportedMediaTypes supportedMediaTypes} property.
+ *
+ * @author Arjen Poutsma
+ * @author Juergen Hoeller
+ * @since 3.0
+ */
+public class StringHttpMessageConverter extends AbstractHttpMessageConverter<String> {
+
+    public static final Charset DEFAULT_CHARSET = StandardCharsets.ISO_8859_1;
+
+    /**
+     * A default constructor that uses {@code "ISO-8859-1"} as the default charset.
+     * @see #StringHttpMessageConverter(Charset)
+     */
+    public StringHttpMessageConverter() {
+        this(DEFAULT_CHARSET);
+    }
+
+}
+
+StringHttpMessageConverter
 
 ```
+
+如果在使用过程中发生乱码，我们可以通过方法设置HttpMessageConverter支持的编码，常用的有UTF-8、GBK等。
+
+4、反序列化异常
+
+这是开发过程中容易碰到的又一个问题。因为Java的开源框架和工具类非常之多，而且版本更迭频繁，所以经常发生一些意想不到的坑。
+
+以joda time为例，joda time是流行的java时间和日期框架，但是如果你的接口对外暴露joda time的类型，比如DateTime，那么接口调用方（同构和异构系统）可能会碰到序列化难题，反序列化时甚至直接抛出如下异常：
+
+org.springframework.http.converter.HttpMessageConversionException: Type definition error: [simple type, class org.joda.time.Chronology]; nested exception is com.fasterxml.jackson.databind.exc.InvalidDefinitionException: Cannot construct instance of `org.joda.time.Chronology` (no Creators, like default construct, exist): abstract types either need to be mapped to concrete types, have custom deserializer, or contain additional type information
+ at [Source: (PushbackInputStream);
+
+我在前厂就碰到过，可以参考这里，后来为了调用方便，改回直接暴露Java的Date类型。
+
+当然解决的方案不止这一种，可以使用jackson支持自定义类的序列化和反序列化的方式。在精度要求不是很高的系统里，实现简单的DateTime自定义序列化：
+```java
+package com.power.demo.util;
+
+
+import com.fasterxml.jackson.core.JsonGenerator;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonSerializer;
+import com.fasterxml.jackson.databind.SerializerProvider;
+import org.joda.time.DateTime;
+import org.joda.time.format.DateTimeFormat;
+import org.joda.time.format.DateTimeFormatter;
+
+import java.io.IOException;
+
+/**
+ * 在默认情况下，jackson会将joda time序列化为较为复杂的形式，不利于阅读，并且对象较大。
+ * <p>
+ * JodaTime 序列化的时候可以将datetime序列化为字符串，更容易读
+ **/
+public class DateTimeSerializer extends JsonSerializer<DateTime> {
+
+    private static DateTimeFormatter dateFormatter = DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss");
+
+    @Override
+    public void serialize(DateTime value, JsonGenerator jgen, SerializerProvider provider) throws IOException, JsonProcessingException {
+        jgen.writeString(value.toString(dateFormatter));
+    }
+}
+
+DateTimeSerializer
+
+```
+
+以及DateTime反序列化：
+```java
+package com.power.demo.util;
+
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationContext;
+import com.fasterxml.jackson.databind.JsonDeserializer;
+import com.fasterxml.jackson.databind.JsonNode;
+import org.joda.time.DateTime;
+import org.joda.time.format.DateTimeFormat;
+import org.joda.time.format.DateTimeFormatter;
+
+import java.io.IOException;
+
+/**
+ * JodaTime 反序列化将字符串转化为datetime
+ **/
+public class DatetimeDeserializer extends JsonDeserializer<DateTime> {
+
+    private static DateTimeFormatter dateFormatter = DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss");
+
+    @Override
+    public DateTime deserialize(JsonParser jp, DeserializationContext context) throws IOException, JsonProcessingException {
+        JsonNode node = jp.getCodec().readTree(jp);
+        String s = node.asText();
+        DateTime parse = DateTime.parse(s, dateFormatter);
+        return parse;
+    }
+}
+
+DatetimeDeserializer
+
+```
+
 
 
 
