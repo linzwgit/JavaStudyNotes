@@ -451,6 +451,131 @@ RestTemplateConfig
 
 ```
 
+看到上面的代码，再对比一下RestTemplate内部实现，就知道我参考了RestTemplate的源码，有洁癖的人可能会说这一坨代码有点啰嗦，上面那一堆static final的变量和messageConverters填充数据方法，暴露了RestTemplate的实现，如果RestTemplate修改了，这里也要改，非常不友好，而且看上去一点也不OO。
+
+经过分析，RestTemplateBuilder.build()构造了RestTemplate对象，只要将内部MappingJackson2HttpMessageConverter修改一下支持的MediaType即可，RestTemplate的messageConverters字段虽然是private final的，我们依然可以通过反射修改之，改进后的代码如下：
+```java
+package com.power.demo.restclient.config;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.common.collect.Lists;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.web.client.RestTemplateBuilder;
+import org.springframework.context.annotation.Bean;
+import org.springframework.http.MediaType;
+import org.springframework.http.converter.HttpMessageConverter;
+import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
+import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestTemplate;
+
+import java.lang.reflect.Field;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Optional;
+import java.util.stream.Collectors;
+
+@Component
+public class RestTemplateConfig {
+
+    // 启动的时候要注意，由于我们在服务中注入了RestTemplate，所以启动的时候需要实例化该类的一个实例
+    @Autowired
+    private RestTemplateBuilder builder;
+
+    @Autowired
+    private ObjectMapper objectMapper;
+
+    // 使用RestTemplateBuilder来实例化RestTemplate对象，spring默认已经注入了RestTemplateBuilder实例
+    @Bean
+    public RestTemplate restTemplate() {
+
+        RestTemplate restTemplate = builder.build();
+
+        List<HttpMessageConverter<?>> messageConverters = Lists.newArrayList();
+        MappingJackson2HttpMessageConverter converter = new MappingJackson2HttpMessageConverter();
+        converter.setObjectMapper(objectMapper);
+
+        //不加可能会出现异常
+        //Could not extract response: no suitable HttpMessageConverter found for response type [class ]
+
+        MediaType[] mediaTypes = new MediaType[]{
+                MediaType.APPLICATION_JSON,
+                MediaType.APPLICATION_OCTET_STREAM,
+
+                MediaType.TEXT_HTML,
+                MediaType.TEXT_PLAIN,
+                MediaType.TEXT_XML,
+                MediaType.APPLICATION_STREAM_JSON,
+                MediaType.APPLICATION_ATOM_XML,
+                MediaType.APPLICATION_FORM_URLENCODED,
+                MediaType.APPLICATION_JSON_UTF8,
+                MediaType.APPLICATION_PDF,
+        };
+
+        converter.setSupportedMediaTypes(Arrays.asList(mediaTypes));
+
+        try {
+            //通过反射设置MessageConverters
+            Field field = restTemplate.getClass().getDeclaredField("messageConverters");
+
+            field.setAccessible(true);
+
+            List<HttpMessageConverter<?>> orgConverterList = (List<HttpMessageConverter<?>>) field.get(restTemplate);
+
+            Optional<HttpMessageConverter<?>> opConverter = orgConverterList.stream()
+                    .filter(x -> x.getClass().getName().equalsIgnoreCase(MappingJackson2HttpMessageConverter.class
+                            .getName()))
+                    .findFirst();
+
+            if (opConverter.isPresent() == false) {
+                return restTemplate;
+            }
+
+            messageConverters.add(converter);//添加MappingJackson2HttpMessageConverter
+
+            //添加原有的剩余的HttpMessageConverter
+            List<HttpMessageConverter<?>> leftConverters = orgConverterList.stream()
+                    .filter(x -> x.getClass().getName().equalsIgnoreCase(MappingJackson2HttpMessageConverter.class
+                            .getName()) == false)
+                    .collect(Collectors.toList());
+
+            messageConverters.addAll(leftConverters);
+
+            System.out.println(String.format("【HttpMessageConverter】原有数量：%s，重新构造后数量：%s"
+                    , orgConverterList.size(), messageConverters.size()));
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+        restTemplate.setMessageConverters(messageConverters);
+
+        return restTemplate;
+    }
+
+}
+
+RestTemplateConfig
+
+```
+
+除了一个messageConverters字段，看上去我们不再关心RestTemplate那些外部依赖包和内部构造过程，果然干净简洁好维护了很多。
+
+3、乱码问题
+
+这个也是一个非常经典的问题。解决方案非常简单，找到HttpMessageConverter，看看默认支持的Charset。AbstractJackson2HttpMessageConverter是很多HttpMessageConverter的基类，默认编码为UTF-8：
+
+```java
+public abstract class AbstractJackson2HttpMessageConverter extends AbstractGenericHttpMessageConverter<Object> {
+
+    public static final Charset DEFAULT_CHARSET = StandardCharsets.UTF_8;
+
+}
+
+```
+而StringHttpMessageConverter比较特殊，有人反馈过发生乱码问题由它默认支持的编码ISO-8859-1引起：
+```ja
+
+```
 
 
 
