@@ -4,5 +4,5 @@ Memcached与Redis异同比较
 2、简单粗暴表格：
 |分类|Redis|Memcached|
 |-|-|-|
-|content1|content2|content3|
+|IO|单线程IO复用模型|多线程，非阻塞网络模型|
 
