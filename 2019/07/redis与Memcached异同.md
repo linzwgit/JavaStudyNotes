@@ -6,4 +6,4 @@ Memcached与Redis异同比较
 |-|-|-|
 |IO|单线程IO复用模型|多线程，非阻塞网络模型|
 |数据类型|K-V模型，多媒体|K-V模型，list,set等|
-|内存管理机制|K-V模型，多媒体|K-V模型，list,set等|
+|内存管理机制|K-V模型，多媒体|默认使用Slab Allocation机制管理内存|
