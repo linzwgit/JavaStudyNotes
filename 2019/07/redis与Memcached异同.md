@@ -5,4 +5,5 @@ Memcached与Redis异同比较
 |分类|Redis|Memcached|
 |-|-|-|
 |IO|单线程IO复用模型|多线程，非阻塞网络模型|
-|数据类型|K-|多线程，非阻塞网络模型|
+|数据类型|K-V模型，多媒体|K-V模型，list,set等|
+|数据类型|K-V模型，多媒体|K-V模型，list,set等|
